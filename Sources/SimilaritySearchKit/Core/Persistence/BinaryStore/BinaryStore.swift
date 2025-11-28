@@ -19,8 +19,7 @@ public class BinaryStore: VectorStoreProtocol {
             let encoder = JSONEncoder()
             let itemData = try encoder.encode(item)
             var length = Int32(itemData.count)
-            var lengthData = Data()
-            lengthData.append(UnsafeBufferPointer(start: &length, count: 1))
+            let lengthData = withUnsafeBytes(of: &length) { Data($0) }
             data.append(lengthData)
             data.append(itemData)
         }
@@ -49,7 +48,7 @@ public class BinaryStore: VectorStoreProtocol {
 
         while start < decompressedData.endIndex {
             let lengthData = decompressedData[start..<(start+4)]
-            let length: Int32 = lengthData.withUnsafeBytes { $0.pointee }
+            let length: Int32 = lengthData.withUnsafeBytes { $0.load(as: Int32.self) }
             start += 4
             let end = start + Int(length)
             let itemData = decompressedData[start..<end]

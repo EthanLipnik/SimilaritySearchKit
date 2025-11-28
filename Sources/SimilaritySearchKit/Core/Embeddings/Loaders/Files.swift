@@ -192,7 +192,7 @@ public class Files {
 }
 
 @available(macOS 13.0, iOS 16.0, *)
-public struct DiskItem: Identifiable, Hashable {
+public struct DiskItem: Identifiable, Hashable, Sendable {
     public var id = UUID()
     public let fileId = UUID()
     public let name: String
@@ -201,7 +201,7 @@ public struct DiskItem: Identifiable, Hashable {
     public var children: [DiskItem]?
 
     // Initializes a DiskItem from the given URL and resource values
-    init(url: URL, isDirectory: Bool, fileSize: Int64, onProgress: ((Int64, Int, Int, String?) -> Void)? = nil) async throws {
+    init(url: URL, isDirectory: Bool, fileSize: Int64, onProgress: (@Sendable (Int64, Int, Int, String?) -> Void)? = nil) async throws {
         self.fileUrl = url
         self.name = url.lastPathComponent
 
@@ -241,7 +241,7 @@ public struct DiskItem: Identifiable, Hashable {
     }
 
     // Processes the task group for the given directory contents
-    private static func processTaskGroup(contents: [URL], onProgress: ((Int64, Int, Int, String?) -> Void)? = nil) async throws -> ([DiskItem], Int64, Int, Int) {
+    private static func processTaskGroup(contents: [URL], onProgress: (@Sendable (Int64, Int, Int, String?) -> Void)? = nil) async throws -> ([DiskItem], Int64, Int, Int) {
         var childItems: [DiskItem] = []
         var currentSize: Int64 = 0
         var files: Int = 0

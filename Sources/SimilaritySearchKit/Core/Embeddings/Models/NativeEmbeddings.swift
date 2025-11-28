@@ -8,7 +8,7 @@
 import Foundation
 import NaturalLanguage
 
-public enum NativeEmbeddingType {
+public enum NativeEmbeddingType: Sendable {
     case wordEmbedding
     case sentenceEmbedding
 }
