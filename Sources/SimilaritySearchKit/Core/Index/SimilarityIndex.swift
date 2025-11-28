@@ -31,7 +31,12 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     }
 
     /// The items stored in the index.
-    public var indexItems: [IndexItem] = []
+    public var indexItems: [IndexItem] = [] {
+        didSet {
+            // Rebuild secondary index when items change externally
+            rebuildItemIndex()
+        }
+    }
 
     /// The dimension of the embeddings in the index.
     /// Used to validate emebdding updates
@@ -43,6 +48,37 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     public let indexModel: any EmbeddingsProtocol
     public var indexMetric: any DistanceMetricProtocol
     public let vectorStore: any VectorStoreProtocol
+
+    /// HNSW index for approximate nearest neighbor search (O(log n) vs O(n))
+    private var hnswIndex: HNSWIndex?
+
+    /// Whether to use HNSW for search (default true for indexes > 100 items)
+    public var useHNSW: Bool = true
+
+    /// Secondary index for O(1) item lookup by ID
+    private var itemsByID: [String: Int] = [:]
+
+    /// Rebuilds the secondary item index
+    private func rebuildItemIndex() {
+        itemsByID.removeAll(keepingCapacity: true)
+        for (index, item) in indexItems.enumerated() {
+            itemsByID[item.id] = index
+        }
+    }
+
+    /// Rebuilds the HNSW index from current items
+    public func rebuildHNSWIndex() {
+        guard useHNSW, !indexItems.isEmpty else {
+            hnswIndex = nil
+            return
+        }
+
+        let hnsw = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
+        for item in indexItems {
+            hnsw.insert(id: item.id, embedding: item.embedding)
+        }
+        hnswIndex = hnsw
+    }
 
     /// An object representing an item in the index.
     public struct IndexItem: Codable, Sendable {
@@ -155,6 +191,21 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
             return []
         }
 
+        // Use HNSW for fast approximate search when available and index is large enough
+        if useHNSW, let hnsw = hnswIndex, indexItems.count >= 100 {
+            let hnswResults = hnsw.search(query: queryEmbedding, k: resultCount)
+
+            return hnswResults.compactMap { result in
+                if let item = getItem(id: result.id) {
+                    // Convert distance to similarity score (1 - normalized_distance)
+                    let score = max(0, 1 - result.distance / 10.0)
+                    return SearchResult(id: item.id, score: score, text: item.text, metadata: item.metadata)
+                }
+                return nil
+            }
+        }
+
+        // Fall back to brute force for small indexes or when HNSW is disabled
         var indexIds: [String] = []
         var indexEmbeddings: [[Float]] = []
 
@@ -225,6 +276,18 @@ public extension SimilarityIndex {
         let embeddingResult = await getEmbedding(for: text, embedding: embedding)
 
         let item = IndexItem(id: id, text: text, embedding: embeddingResult, metadata: metadata)
+
+        // Update secondary index
+        itemsByID[id] = indexItems.count
+
+        // Add to HNSW if enabled
+        if useHNSW {
+            if hnswIndex == nil {
+                hnswIndex = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
+            }
+            hnswIndex?.insert(id: id, embedding: embeddingResult)
+        }
+
         indexItems.append(item)
     }
 
@@ -281,7 +344,11 @@ public extension SimilarityIndex {
     // MARK: Read
 
     func getItem(id: String) -> IndexItem? {
-        return indexItems.first { $0.id == id }
+        // O(1) lookup using secondary index
+        guard let index = itemsByID[id], index < indexItems.count else {
+            return nil
+        }
+        return indexItems[index]
     }
 
     func sample(_ count: Int) -> [IndexItem]? {
@@ -294,35 +361,50 @@ public extension SimilarityIndex {
         // Check if the provided embedding has the correct dimension
         if let embedding = embedding, embedding.count != dimension {
             print("Dimension mismatch, expected \(dimension), saw \(embedding.count)")
+            return
         }
 
-        // Find the item with the specified id
-        if let index = indexItems.firstIndex(where: { $0.id == id }) {
-            // Update the text if provided
-            if let text = text {
-                indexItems[index].text = text
-            }
+        // Find the item with the specified id using O(1) lookup
+        guard let index = itemsByID[id], index < indexItems.count else {
+            return
+        }
 
-            // Update the embedding if provided
-            if let embedding = embedding {
-                indexItems[index].embedding = embedding
-            }
+        // Update the text if provided
+        if let text = text {
+            indexItems[index].text = text
+        }
 
-            // Update the metadata if provided
-            if let metadata = metadata {
-                indexItems[index].metadata = metadata
+        // Update the embedding if provided
+        if let embedding = embedding {
+            indexItems[index].embedding = embedding
+            // Update HNSW index - remove old and insert new
+            if useHNSW, let hnsw = hnswIndex {
+                hnsw.remove(id: id)
+                hnsw.insert(id: id, embedding: embedding)
             }
+        }
+
+        // Update the metadata if provided
+        if let metadata = metadata {
+            indexItems[index].metadata = metadata
         }
     }
 
     // MARK: Delete
 
     func removeItem(id: String) {
+        // Remove from HNSW first
+        hnswIndex?.remove(id: id)
+
+        // Remove from indexItems and rebuild secondary index
         indexItems.removeAll { $0.id == id }
+        // Note: didSet will trigger rebuildItemIndex()
     }
 
     func removeAll() {
+        hnswIndex = nil
         indexItems.removeAll()
+        // Note: didSet will trigger rebuildItemIndex()
     }
 }
 
@@ -343,6 +425,14 @@ public extension SimilarityIndex {
 
         let savedVectorStore = try vectorStore.saveIndex(items: indexItems, to: basePath, as: indexName)
 
+        // Save HNSW index as companion file for fast loading
+        if useHNSW, let hnsw = hnswIndex {
+            let hnswURL = basePath.appendingPathComponent("\(indexName).hnsw")
+            let hnswData = hnsw.serialize()
+            try hnswData.write(to: hnswURL, options: .atomic)
+            print("Saved HNSW index (\(hnswData.count) bytes) to \(hnswURL.absoluteString)")
+        }
+
         print("Saved \(indexItems.count) index items to \(savedVectorStore.absoluteString)")
 
         return savedVectorStore
@@ -351,6 +441,30 @@ public extension SimilarityIndex {
     func loadIndex(fromDirectory path: URL? = nil, name: String? = nil) throws -> [IndexItem]? {
         if let indexPath = try getIndexPath(fromDirectory: path, name: name) {
             indexItems = try vectorStore.loadIndex(from: indexPath)
+
+            // Try to load HNSW from companion file for instant access
+            if useHNSW, !indexItems.isEmpty {
+                let basePath = indexPath.deletingLastPathComponent()
+                let indexName = name ?? self.indexName
+                let hnswURL = basePath.appendingPathComponent("\(indexName).hnsw")
+
+                if FileManager.default.fileExists(atPath: hnswURL.path),
+                   let hnswData = try? Data(contentsOf: hnswURL) {
+                    // Load existing HNSW graph
+                    let hnsw = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
+                    do {
+                        try hnsw.deserialize(from: hnswData, items: indexItems)
+                        hnswIndex = hnsw
+                        print("Loaded HNSW index from \(hnswURL.absoluteString)")
+                    } catch {
+                        print("Failed to deserialize HNSW, rebuilding: \(error)")
+                        rebuildHNSWIndex()
+                    }
+                } else {
+                    // No companion file, rebuild from items
+                    rebuildHNSWIndex()
+                }
+            }
             return indexItems
         }
 
