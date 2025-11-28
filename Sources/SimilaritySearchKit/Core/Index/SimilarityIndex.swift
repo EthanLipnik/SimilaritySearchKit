@@ -17,7 +17,7 @@ public typealias TextSplitterType = SimilarityIndex.TextSplitterType
 public typealias VectorStoreType = SimilarityIndex.VectorStoreType
 
 @available(macOS 11.0, iOS 15.0, *)
-public class SimilarityIndex: Identifiable, Hashable {
+public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     // MARK: - Properties
 
     /// Unique identifier for this index instance
@@ -228,22 +228,54 @@ public extension SimilarityIndex {
         indexItems.append(item)
     }
 
-    func addItems(ids: [String], texts: [String], metadata: [[String: String]], embeddings: [[Float]?]? = nil) async {
+    /// Progress update for addItems operations
+    struct AddItemsProgress: Sendable {
+        public let id: String
+        public let current: Int
+        public let total: Int
+    }
+
+    func addItems(ids: [String], texts: [String], metadata: [[String: String]], embeddings: [[Float]?]? = nil) -> AsyncStream<AddItemsProgress> {
         precondition(ids.count == texts.count && texts.count == metadata.count, "Input arrays must have the same length.")
 
         if let embeddings = embeddings, embeddings.count != ids.count {
             print("Embeddings array length must be the same as ids array length. \(embeddings.count) vs \(ids.count)")
         }
 
-        for i in 0..<ids.count {
-            await addItem(id: ids[i], text: texts[i], metadata: metadata[i], embedding: embeddings?[i])
+        let (stream, continuation) = AsyncStream.makeStream(of: AddItemsProgress.self)
+
+        let total = ids.count
+        let capturedIds = ids
+        let capturedTexts = texts
+        let capturedMetadata = metadata
+        let capturedEmbeddings = embeddings
+
+        Task { [weak self] in
+            for i in 0..<total {
+                await self?.addItem(id: capturedIds[i], text: capturedTexts[i], metadata: capturedMetadata[i], embedding: capturedEmbeddings?[i])
+                continuation.yield(AddItemsProgress(id: capturedIds[i], current: i + 1, total: total))
+            }
+            continuation.finish()
         }
+
+        return stream
     }
 
-    func addItems(_ items: [IndexItem]) async {
-        for item in items {
-            await self.addItem(id: item.id, text: item.text, metadata: item.metadata, embedding: item.embedding)
+    func addItems(_ items: [IndexItem]) -> AsyncStream<AddItemsProgress> {
+        let (stream, continuation) = AsyncStream.makeStream(of: AddItemsProgress.self)
+
+        let total = items.count
+        let capturedItems = items
+
+        Task { [weak self] in
+            for (index, item) in capturedItems.enumerated() {
+                await self?.addItem(id: item.id, text: item.text, metadata: item.metadata, embedding: item.embedding)
+                continuation.yield(AddItemsProgress(id: item.id, current: index + 1, total: total))
+            }
+            continuation.finish()
         }
+
+        return stream
     }
 
     // MARK: Read
