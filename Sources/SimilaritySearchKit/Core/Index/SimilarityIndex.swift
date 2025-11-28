@@ -45,7 +45,7 @@ public class SimilarityIndex: Identifiable, Hashable {
     public let vectorStore: any VectorStoreProtocol
 
     /// An object representing an item in the index.
-    public struct IndexItem: Codable {
+    public struct IndexItem: Codable, Sendable {
         /// The unique identifier of the item.
         public let id: String
 
@@ -228,39 +228,21 @@ public extension SimilarityIndex {
         indexItems.append(item)
     }
 
-    func addItems(ids: [String], texts: [String], metadata: [[String: String]], embeddings: [[Float]?]? = nil, onProgress: ((String) -> Void)? = nil) async {
-        // Check if all input arrays have the same length
-        guard ids.count == texts.count, texts.count == metadata.count else {
-            fatalError("Input arrays must have the same length.")
-        }
+    func addItems(ids: [String], texts: [String], metadata: [[String: String]], embeddings: [[Float]?]? = nil) async {
+        precondition(ids.count == texts.count && texts.count == metadata.count, "Input arrays must have the same length.")
 
         if let embeddings = embeddings, embeddings.count != ids.count {
             print("Embeddings array length must be the same as ids array length. \(embeddings.count) vs \(ids.count)")
         }
 
-        await withTaskGroup(of: Void.self) { taskGroup in
-            for i in 0..<ids.count {
-                let id = ids[i]
-                let text = texts[i]
-                let embedding = embeddings?[i]
-                let meta = metadata[i]
-
-                taskGroup.addTask(priority: .userInitiated) {
-                    // Add the item using the addItem method
-                    await self.addItem(id: id, text: text, metadata: meta, embedding: embedding)
-                    onProgress?(id)
-                }
-            }
-            await taskGroup.next()
+        for i in 0..<ids.count {
+            await addItem(id: ids[i], text: texts[i], metadata: metadata[i], embedding: embeddings?[i])
         }
     }
 
-    func addItems(_ items: [IndexItem], completion: (() -> Void)? = nil) {
-        Task {
-            for item in items {
-                await self.addItem(id: item.id, text: item.text, metadata: item.metadata, embedding: item.embedding)
-            }
-            completion?()
+    func addItems(_ items: [IndexItem]) async {
+        for item in items {
+            await self.addItem(id: item.id, text: item.text, metadata: item.metadata, embedding: item.embedding)
         }
     }
 

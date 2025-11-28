@@ -16,9 +16,9 @@ public class MultiQAMiniLMEmbeddings: EmbeddingsProtocol {
     public let inputDimention: Int = 512
     public let outputDimention: Int = 384
 
-    public init() {
+    public init(computeUnits: MLComputeUnits = .all) {
         let modelConfig = MLModelConfiguration()
-        modelConfig.computeUnits = .all
+        modelConfig.computeUnits = computeUnits
 
         do {
             self.model = try multi_qa_MiniLM_L6_cos_v1(configuration: modelConfig)

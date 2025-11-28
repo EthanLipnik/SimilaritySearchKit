@@ -16,9 +16,9 @@ public class DistilbertEmbeddings: EmbeddingsProtocol {
     public let inputDimention: Int = 512
     public let outputDimention: Int = 768
 
-    public init() {
+    public init(computeUnits: MLComputeUnits = .all) {
         let modelConfig = MLModelConfiguration()
-        modelConfig.computeUnits = .all
+        modelConfig.computeUnits = computeUnits
 
         do {
             self.model = try msmarco_distilbert_base_tas_b_512_single_quantized(configuration: modelConfig)

@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import NaturalLanguage
+@preconcurrency import NaturalLanguage
 import CoreML
 
 #if canImport(NaturalLanguage.NLContextualEmbedding)
