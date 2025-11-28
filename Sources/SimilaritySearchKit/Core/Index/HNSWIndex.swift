@@ -140,6 +140,10 @@ public final class HNSWIndex: @unchecked Sendable {
         }
 
         // Phase 2: From level min(maxLevel, newLevel) down to 0, find and connect neighbors
+        // First, append the new node so it's accessible during neighbor updates
+        nodes.append(newNode)
+        idToIndex[id] = newIndex
+
         var level = min(maxLevel, newLevel)
         while level >= 0 {
             let candidates = searchLayer(
@@ -157,10 +161,14 @@ public final class HNSWIndex: @unchecked Sendable {
             )
 
             // Connect new node to neighbors
-            newNode.connections[level] = neighbors
+            nodes[newIndex].connections[level] = neighbors
 
             // Connect neighbors back to new node (with pruning if needed)
             for neighborIndex in neighbors {
+                // Bounds check
+                guard neighborIndex >= 0 && neighborIndex < nodes.count else { continue }
+                guard level < nodes[neighborIndex].connections.count else { continue }
+
                 var neighborConns = nodes[neighborIndex].connections[level]
                 neighborConns.append(newIndex)
 
@@ -180,9 +188,6 @@ public final class HNSWIndex: @unchecked Sendable {
             }
             level -= 1
         }
-
-        nodes.append(newNode)
-        idToIndex[id] = newIndex
 
         // Update entry point if new node has higher level
         if newLevel > maxLevel {
@@ -409,13 +414,20 @@ public final class HNSWIndex: @unchecked Sendable {
 
     /// Greedily finds the closest node starting from startIndex at given level.
     private func greedySearchClosest(query: [Float], startIndex: Int, level: Int) -> Int {
+        guard startIndex >= 0 && startIndex < nodes.count else { return startIndex }
+
         var currentIndex = startIndex
         var currentDist = euclideanDistance(query, nodes[currentIndex].embedding)
 
         var changed = true
         while changed {
             changed = false
-            for neighborIndex in nodes[currentIndex].connections[level] {
+
+            let node = nodes[currentIndex]
+            guard level < node.connections.count else { break }
+
+            for neighborIndex in node.connections[level] {
+                guard neighborIndex >= 0 && neighborIndex < nodes.count else { continue }
                 let neighborDist = euclideanDistance(query, nodes[neighborIndex].embedding)
                 if neighborDist < currentDist {
                     currentDist = neighborDist
@@ -440,7 +452,7 @@ public final class HNSWIndex: @unchecked Sendable {
         // Results: max-heap ordered by distance (farthest first for easy pruning)
         var results = Heap<(distance: Float, index: Int)>(sort: { $0.distance > $1.distance })
 
-        for ep in entryPoints {
+        for ep in entryPoints where ep >= 0 && ep < nodes.count {
             let dist = euclideanDistance(query, nodes[ep].embedding)
             candidates.insert((dist, ep))
             results.insert((dist, ep))
@@ -452,8 +464,14 @@ public final class HNSWIndex: @unchecked Sendable {
                 break
             }
 
+            // Bounds check before accessing connections
+            guard cIndex >= 0 && cIndex < nodes.count else { continue }
+            let node = nodes[cIndex]
+            guard level < node.connections.count else { continue }
+
             // Explore neighbors
-            for neighborIndex in nodes[cIndex].connections[level] {
+            for neighborIndex in node.connections[level] {
+                guard neighborIndex >= 0 && neighborIndex < nodes.count else { continue }
                 guard !visited.contains(neighborIndex) else { continue }
                 visited.insert(neighborIndex)
 
@@ -481,12 +499,15 @@ public final class HNSWIndex: @unchecked Sendable {
 
     /// Selects the best M neighbors from candidates using simple heuristic.
     private func selectNeighbors(candidates: [Int], query: [Float], M: Int) -> [Int] {
-        if candidates.count <= M {
-            return candidates
+        // Filter out any invalid indices
+        let validCandidates = candidates.filter { $0 >= 0 && $0 < nodes.count }
+
+        if validCandidates.count <= M {
+            return validCandidates
         }
 
         // Sort by distance and take closest M
-        let sorted = candidates.sorted { a, b in
+        let sorted = validCandidates.sorted { a, b in
             euclideanDistance(query, nodes[a].embedding) < euclideanDistance(query, nodes[b].embedding)
         }
         return Array(sorted.prefix(M))
