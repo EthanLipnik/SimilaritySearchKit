@@ -409,8 +409,8 @@ struct ChatWithFilesExampleSwiftUIView: View {
         let elapsedTime = await clock.measure {
             let index = await SimilarityIndex(model: embeddingModel, metric: distanceMetric)
 
-            await index.addItems(ids: folderTextIds, texts: folderTextChunks, metadata: folderTextMetadata) { _ in
-                progressCurrent += 1
+            for await progress in index.addItems(ids: folderTextIds, texts: folderTextChunks, metadata: folderTextMetadata) {
+                progressCurrent = Double(progress.current)
             }
 
             print("Built index with \(index.indexItems.count) items")

@@ -42,11 +42,11 @@ class BenchmarkTests: XCTestCase {
 
         Task {
             let similarityIndex = await SimilarityIndex(model: DistilbertEmbeddings())
-            await similarityIndex.addItems(
+            for await _ in similarityIndex.addItems(
                 ids: [UUID().uuidString],
                 texts: [searchPassage.text],
                 metadata: [searchPassage.metadata]
-            )
+            ) {}
 
             let top_k = await similarityIndex.search("test query")
             let searchResult: SimilarityIndex.SearchResult = top_k.first!
@@ -128,11 +128,11 @@ class BenchmarkTests: XCTestCase {
             let similarityIndex = await SimilarityIndex(model: DistilbertEmbeddings())
 
             var startTime = CFAbsoluteTimeGetCurrent()
-            await similarityIndex.addItems(
+            for await _ in similarityIndex.addItems(
                 ids: passageIds,
                 texts: passageTexts,
                 metadata: passageUrls
-            )
+            ) {}
             var endTime = CFAbsoluteTimeGetCurrent()
             var elapsedTime = endTime - startTime
             print("\nGenerating index took \(elapsedTime) s")
