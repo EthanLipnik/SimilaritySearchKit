@@ -471,6 +471,54 @@ public extension SimilarityIndex {
         return nil
     }
 
+    /// Saves the HNSW index to a companion file.
+    ///
+    /// Use this when saving index items through a custom VectorStore (e.g., MMapStore)
+    /// but still want HNSW persistence for fast startup.
+    ///
+    /// - Parameters:
+    ///   - path: Directory to save to
+    ///   - name: Index name (used for filename)
+    func saveHNSW(to path: URL, name: String? = nil) throws {
+        guard useHNSW, let hnsw = hnswIndex else { return }
+        let indexName = name ?? self.indexName
+        let hnswURL = path.appendingPathComponent("\(indexName).hnsw")
+        let hnswData = hnsw.serialize()
+        try hnswData.write(to: hnswURL, options: .atomic)
+    }
+
+    /// Loads the HNSW index from a companion file, or rebuilds if not found.
+    ///
+    /// Use this after loading index items through a custom VectorStore (e.g., MMapStore)
+    /// to restore the HNSW graph for fast approximate search.
+    ///
+    /// - Parameters:
+    ///   - path: Directory containing the .hnsw file
+    ///   - name: Index name (used for filename)
+    func loadOrRebuildHNSW(from path: URL, name: String? = nil) {
+        guard useHNSW, !indexItems.isEmpty else {
+            hnswIndex = nil
+            return
+        }
+
+        let indexName = name ?? self.indexName
+        let hnswURL = path.appendingPathComponent("\(indexName).hnsw")
+
+        if FileManager.default.fileExists(atPath: hnswURL.path),
+           let hnswData = try? Data(contentsOf: hnswURL) {
+            let hnsw = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
+            do {
+                try hnsw.deserialize(from: hnswData, items: indexItems)
+                hnswIndex = hnsw
+                return
+            } catch {
+                print("Failed to deserialize HNSW, rebuilding: \(error)")
+            }
+        }
+
+        rebuildHNSWIndex()
+    }
+
     /// This function returns the default location where the data from the loadIndex/saveIndex functions gets stored
     /// gets stored.
     /// - Parameters:
