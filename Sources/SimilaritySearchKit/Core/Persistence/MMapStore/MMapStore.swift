@@ -205,7 +205,7 @@ public class MMapStore: VectorStoreProtocol {
             guard offset + 4 <= data.count else {
                 throw MMapStoreError.corruptedData("Unexpected end of IDs section")
             }
-            let length = data[offset..<(offset + 4)].withUnsafeBytes { $0.load(as: UInt32.self) }
+            let length = data[offset..<(offset + 4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
             offset += 4
 
             guard offset + Int(length) <= data.count else {
@@ -226,7 +226,7 @@ public class MMapStore: VectorStoreProtocol {
             throw MMapStoreError.corruptedData("Metadata section too small")
         }
 
-        let metadataLength = data[metadataOffset..<(metadataOffset + 4)].withUnsafeBytes { $0.load(as: UInt32.self) }
+        let metadataLength = data[metadataOffset..<(metadataOffset + 4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
         let metadataStart = metadataOffset + 4
         let metadataEnd = metadataStart + Int(metadataLength)
 
@@ -255,7 +255,7 @@ public class MMapStore: VectorStoreProtocol {
             guard offset + 4 <= data.count else {
                 throw MMapStoreError.corruptedData("Unexpected end of text section")
             }
-            let length = data[offset..<(offset + 4)].withUnsafeBytes { $0.load(as: UInt32.self) }
+            let length = data[offset..<(offset + 4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
             offset += 4
 
             guard offset + Int(length) <= data.count else {
@@ -333,21 +333,21 @@ public class MMapStore: VectorStoreProtocol {
             throw MMapStoreError.fileTooSmall
         }
 
-        let magic = data[0..<4].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+        let magic = data[0..<4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
         guard magic == Self.magic else {
             throw MMapStoreError.invalidMagic
         }
 
-        let version = data[4..<8].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+        let version = data[4..<8].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
         guard version == Self.version else {
             throw MMapStoreError.unsupportedVersion(version)
         }
 
-        let itemCount = data[8..<16].withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
-        let dimension = data[16..<20].withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
-        let idsOffset = data[20..<28].withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
-        let metadataOffset = data[28..<36].withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
-        let textOffset = data[36..<44].withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
+        let itemCount = data[8..<16].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
+        let dimension = data[16..<20].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
+        let idsOffset = data[20..<28].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
+        let metadataOffset = data[28..<36].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
+        let textOffset = data[36..<44].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
 
         return Header(
             magic: magic,
