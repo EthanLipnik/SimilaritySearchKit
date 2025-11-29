@@ -344,17 +344,18 @@ public final class HNSWIndex: @unchecked Sendable {
 
         var offset = 0
 
-        let nodeCount = data[offset..<(offset+4)].withUnsafeBytes { $0.load(as: UInt32.self) }
+        // Use loadUnaligned to handle potentially misaligned data
+        let nodeCount = data[offset..<(offset+4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
         offset += 4
 
         guard Int(nodeCount) == items.count else {
             throw HNSWError.invalidData("Node count mismatch: \(nodeCount) vs \(items.count)")
         }
 
-        maxLevel = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.load(as: UInt32.self) })
+        maxLevel = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
         offset += 4
 
-        entryPointIndex = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.load(as: UInt32.self) })
+        entryPointIndex = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
         offset += 4
 
         // Skip M and efSearch (already set in init)
@@ -378,7 +379,7 @@ public final class HNSWIndex: @unchecked Sendable {
                 guard offset + 2 <= data.count else {
                     throw HNSWError.invalidData("Unexpected end of data reading connections")
                 }
-                let connCount = Int(data[offset..<(offset+2)].withUnsafeBytes { $0.load(as: UInt16.self) })
+                let connCount = Int(data[offset..<(offset+2)].withUnsafeBytes { $0.loadUnaligned(as: UInt16.self) })
                 offset += 2
 
                 var levelConns: [Int] = []
@@ -386,7 +387,7 @@ public final class HNSWIndex: @unchecked Sendable {
                     guard offset + 4 <= data.count else {
                         throw HNSWError.invalidData("Unexpected end of data reading connection index")
                     }
-                    let connIndex = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.load(as: UInt32.self) })
+                    let connIndex = Int(data[offset..<(offset+4)].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
                     offset += 4
                     levelConns.append(connIndex)
                 }
