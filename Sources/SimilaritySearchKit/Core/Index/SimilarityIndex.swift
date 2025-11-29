@@ -480,7 +480,14 @@ public extension SimilarityIndex {
     ///   - path: Directory to save to
     ///   - name: Index name (used for filename)
     func saveHNSW(to path: URL, name: String? = nil) throws {
-        guard useHNSW, let hnsw = hnswIndex else { return }
+        guard useHNSW else { return }
+
+        // Rebuild HNSW before saving to eliminate soft-deleted nodes
+        // (HNSW.remove() doesn't actually remove nodes from the array,
+        // so nodes.count can drift from indexItems.count after updates)
+        rebuildHNSWIndex()
+
+        guard let hnsw = hnswIndex else { return }
         let indexName = name ?? self.indexName
         let hnswURL = path.appendingPathComponent("\(indexName).hnsw")
         let hnswData = hnsw.serialize()
