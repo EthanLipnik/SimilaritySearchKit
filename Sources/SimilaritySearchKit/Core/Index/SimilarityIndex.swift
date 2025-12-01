@@ -31,12 +31,8 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     }
 
     /// The items stored in the index.
-    public var indexItems: [IndexItem] = [] {
-        didSet {
-            // Rebuild secondary index when items change externally
-            rebuildItemIndex()
-        }
-    }
+    /// Note: When setting this externally, call `rebuildItemIndex()` afterward.
+    public var indexItems: [IndexItem] = []
 
     /// The dimension of the embeddings in the index.
     /// Used to validate emebdding updates
@@ -58,16 +54,29 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     /// Secondary index for O(1) item lookup by ID
     private var itemsByID: [String: Int] = [:]
 
-    /// Rebuilds the secondary item index
-    private func rebuildItemIndex() {
+    /// Lock for thread-safe access to mutable state
+    private let lock = NSLock()
+
+    /// Rebuilds the secondary item index.
+    /// IMPORTANT: Caller must hold `lock`.
+    private func rebuildItemIndexLocked() {
         itemsByID.removeAll(keepingCapacity: true)
         for (index, item) in indexItems.enumerated() {
             itemsByID[item.id] = index
         }
     }
 
-    /// Rebuilds the HNSW index from current items
-    public func rebuildHNSWIndex() {
+    /// Rebuilds the secondary item index (thread-safe).
+    /// Call this after setting `indexItems` externally.
+    public func rebuildItemIndex() {
+        lock.lock()
+        defer { lock.unlock() }
+        rebuildItemIndexLocked()
+    }
+
+    /// Rebuilds the HNSW index from current items.
+    /// IMPORTANT: Caller must hold `lock`.
+    private func rebuildHNSWIndexLocked() {
         guard useHNSW, !indexItems.isEmpty else {
             hnswIndex = nil
             return
@@ -78,6 +87,13 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
             hnsw.insert(id: item.id, embedding: item.embedding)
         }
         hnswIndex = hnsw
+    }
+
+    /// Rebuilds the HNSW index from current items (thread-safe).
+    public func rebuildHNSWIndex() {
+        lock.lock()
+        defer { lock.unlock() }
+        rebuildHNSWIndexLocked()
     }
 
     /// An object representing an item in the index.
@@ -191,12 +207,21 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
             return []
         }
 
+        // Snapshot state under lock to avoid race conditions
+        lock.lock()
+        let useHNSWSearch = useHNSW && hnswIndex != nil && indexItems.count >= 100
+        let currentHNSW = hnswIndex
+        let currentItems = indexItems
+        let currentItemsByID = itemsByID
+        lock.unlock()
+
         // Use HNSW for fast approximate search when available and index is large enough
-        if useHNSW, let hnsw = hnswIndex, indexItems.count >= 100 {
+        if useHNSWSearch, let hnsw = currentHNSW {
             let hnswResults = hnsw.search(query: queryEmbedding, k: resultCount)
 
             return hnswResults.compactMap { result in
-                if let item = getItem(id: result.id) {
+                if let index = currentItemsByID[result.id], index < currentItems.count {
+                    let item = currentItems[index]
                     // Convert distance to similarity score (1 - normalized_distance)
                     let score = max(0, 1 - result.distance / 10.0)
                     return SearchResult(id: item.id, score: score, text: item.text, metadata: item.metadata)
@@ -209,28 +234,30 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
         var indexIds: [String] = []
         var indexEmbeddings: [[Float]] = []
 
-        for item in indexItems {
+        for item in currentItems {
             indexIds.append(item.id)
             indexEmbeddings.append(item.embedding)
         }
 
         // Calculate distances and find nearest neighbors
+        var searchMetric = indexMetric
         if let customMetric = metric {
-            // Allow custom metrics at time of query
-            indexMetric = customMetric
+            searchMetric = customMetric
         }
-        let searchResults = indexMetric.findNearest(for: queryEmbedding, in: indexEmbeddings, resultsCount: resultCount)
+        let searchResults = searchMetric.findNearest(for: queryEmbedding, in: indexEmbeddings, resultsCount: resultCount)
 
         // Map results to index ids
         return searchResults.compactMap { result in
             let (score, index) = result
+            guard index < indexIds.count else { return nil }
             let id = indexIds[index]
 
-            if let item = getItem(id: id) {
+            if let itemIndex = currentItemsByID[id], itemIndex < currentItems.count {
+                let item = currentItems[itemIndex]
                 return SearchResult(id: item.id, score: score, text: item.text, metadata: item.metadata)
             } else {
                 print("Failed to find item with id '\(id)' in indexItems.")
-                return SearchResult(id: "000000", score: 0.0, text: "fail", metadata: [:])
+                return nil
             }
         }
     }
@@ -274,8 +301,10 @@ public extension SimilarityIndex {
     /// Add an item with optional pre-computed embedding
     func addItem(id: String, text: String, metadata: [String: String], embedding: [Float]? = nil) async {
         let embeddingResult = await getEmbedding(for: text, embedding: embedding)
-
         let item = IndexItem(id: id, text: text, embedding: embeddingResult, metadata: metadata)
+
+        lock.lock()
+        defer { lock.unlock() }
 
         // Update secondary index
         itemsByID[id] = indexItems.count
@@ -344,6 +373,8 @@ public extension SimilarityIndex {
     // MARK: Read
 
     func getItem(id: String) -> IndexItem? {
+        lock.lock()
+        defer { lock.unlock() }
         // O(1) lookup using secondary index
         guard let index = itemsByID[id], index < indexItems.count else {
             return nil
@@ -352,7 +383,10 @@ public extension SimilarityIndex {
     }
 
     func sample(_ count: Int) -> [IndexItem]? {
-        return Array(indexItems.prefix(upTo: count))
+        lock.lock()
+        defer { lock.unlock() }
+        guard count <= indexItems.count else { return nil }
+        return Array(indexItems.prefix(count))
     }
 
     // MARK: Update
@@ -363,6 +397,9 @@ public extension SimilarityIndex {
             print("Dimension mismatch, expected \(dimension), saw \(embedding.count)")
             return
         }
+
+        lock.lock()
+        defer { lock.unlock() }
 
         // Find the item with the specified id using O(1) lookup
         guard let index = itemsByID[id], index < indexItems.count else {
@@ -393,18 +430,24 @@ public extension SimilarityIndex {
     // MARK: Delete
 
     func removeItem(id: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
         // Remove from HNSW first
         hnswIndex?.remove(id: id)
 
         // Remove from indexItems and rebuild secondary index
         indexItems.removeAll { $0.id == id }
-        // Note: didSet will trigger rebuildItemIndex()
+        rebuildItemIndexLocked()
     }
 
     func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+
         hnswIndex = nil
         indexItems.removeAll()
-        // Note: didSet will trigger rebuildItemIndex()
+        rebuildItemIndexLocked()
     }
 }
 
@@ -423,24 +466,35 @@ public extension SimilarityIndex {
             basePath = try getDefaultStoragePath()
         }
 
-        let savedVectorStore = try vectorStore.saveIndex(items: indexItems, to: basePath, as: indexName)
+        // Snapshot state under lock
+        lock.lock()
+        let itemsToSave = indexItems
+        let currentHNSW = hnswIndex
+        let shouldSaveHNSW = useHNSW
+        lock.unlock()
+
+        let savedVectorStore = try vectorStore.saveIndex(items: itemsToSave, to: basePath, as: indexName)
 
         // Save HNSW index as companion file for fast loading
-        if useHNSW, let hnsw = hnswIndex {
+        if shouldSaveHNSW, let hnsw = currentHNSW {
             let hnswURL = basePath.appendingPathComponent("\(indexName).hnsw")
             let hnswData = hnsw.serialize()
             try hnswData.write(to: hnswURL, options: .atomic)
             print("Saved HNSW index (\(hnswData.count) bytes) to \(hnswURL.absoluteString)")
         }
 
-        print("Saved \(indexItems.count) index items to \(savedVectorStore.absoluteString)")
+        print("Saved \(itemsToSave.count) index items to \(savedVectorStore.absoluteString)")
 
         return savedVectorStore
     }
 
     func loadIndex(fromDirectory path: URL? = nil, name: String? = nil) throws -> [IndexItem]? {
         if let indexPath = try getIndexPath(fromDirectory: path, name: name) {
-            indexItems = try vectorStore.loadIndex(from: indexPath)
+            let loadedItems = try vectorStore.loadIndex(from: indexPath)
+
+            lock.lock()
+            indexItems = loadedItems
+            rebuildItemIndexLocked()
 
             // Try to load HNSW from companion file for instant access
             if useHNSW, !indexItems.isEmpty {
@@ -458,14 +512,16 @@ public extension SimilarityIndex {
                         print("Loaded HNSW index from \(hnswURL.absoluteString)")
                     } catch {
                         print("Failed to deserialize HNSW, rebuilding: \(error)")
-                        rebuildHNSWIndex()
+                        rebuildHNSWIndexLocked()
                     }
                 } else {
                     // No companion file, rebuild from items
-                    rebuildHNSWIndex()
+                    rebuildHNSWIndexLocked()
                 }
             }
-            return indexItems
+            let result = indexItems
+            lock.unlock()
+            return result
         }
 
         return nil
@@ -480,14 +536,23 @@ public extension SimilarityIndex {
     ///   - path: Directory to save to
     ///   - name: Index name (used for filename)
     func saveHNSW(to path: URL, name: String? = nil) throws {
-        guard useHNSW else { return }
+        lock.lock()
+        guard useHNSW else {
+            lock.unlock()
+            return
+        }
 
         // Rebuild HNSW before saving to eliminate soft-deleted nodes
         // (HNSW.remove() doesn't actually remove nodes from the array,
         // so nodes.count can drift from indexItems.count after updates)
-        rebuildHNSWIndex()
+        rebuildHNSWIndexLocked()
 
-        guard let hnsw = hnswIndex else { return }
+        guard let hnsw = hnswIndex else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
         let indexName = name ?? self.indexName
         let hnswURL = path.appendingPathComponent("\(indexName).hnsw")
         let hnswData = hnsw.serialize()
@@ -503,27 +568,32 @@ public extension SimilarityIndex {
     ///   - path: Directory containing the .hnsw file
     ///   - name: Index name (used for filename)
     func loadOrRebuildHNSW(from path: URL, name: String? = nil) {
+        lock.lock()
         guard useHNSW, !indexItems.isEmpty else {
             hnswIndex = nil
+            lock.unlock()
             return
         }
 
         let indexName = name ?? self.indexName
         let hnswURL = path.appendingPathComponent("\(indexName).hnsw")
+        let currentItems = indexItems
 
         if FileManager.default.fileExists(atPath: hnswURL.path),
            let hnswData = try? Data(contentsOf: hnswURL) {
             let hnsw = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
             do {
-                try hnsw.deserialize(from: hnswData, items: indexItems)
+                try hnsw.deserialize(from: hnswData, items: currentItems)
                 hnswIndex = hnsw
+                lock.unlock()
                 return
             } catch {
                 print("Failed to deserialize HNSW, rebuilding: \(error)")
             }
         }
 
-        rebuildHNSWIndex()
+        rebuildHNSWIndexLocked()
+        lock.unlock()
     }
 
     /// This function returns the default location where the data from the loadIndex/saveIndex functions gets stored
@@ -561,9 +631,13 @@ public extension SimilarityIndex {
     }
 
     func estimatedSizeInBytes() -> Int {
+        lock.lock()
+        let currentItems = indexItems
+        lock.unlock()
+
         var totalSize = 0
 
-        for item in indexItems {
+        for item in currentItems {
             // Calculate the size of 'id' property
             let idSize = item.id.utf8.count
 
