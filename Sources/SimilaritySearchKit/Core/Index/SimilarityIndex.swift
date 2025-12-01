@@ -57,6 +57,31 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
     /// Lock for thread-safe access to mutable state
     private let lock = NSLock()
 
+    /// Snapshots state needed for search (thread-safe helper for async context)
+    private func snapshotStateForSearch() -> (useHNSWSearch: Bool, hnsw: HNSWIndex?, items: [IndexItem], itemsByID: [String: Int]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let useHNSWSearch = useHNSW && hnswIndex != nil && indexItems.count >= 100
+        return (useHNSWSearch, hnswIndex, indexItems, itemsByID)
+    }
+
+    /// Adds an item to the index (thread-safe helper for async context)
+    private func addItemToIndexLocked(id: String, item: IndexItem, embedding: [Float]) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        itemsByID[id] = indexItems.count
+
+        if useHNSW {
+            if hnswIndex == nil {
+                hnswIndex = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
+            }
+            hnswIndex?.insert(id: id, embedding: embedding)
+        }
+
+        indexItems.append(item)
+    }
+
     /// Rebuilds the secondary item index.
     /// IMPORTANT: Caller must hold `lock`.
     private func rebuildItemIndexLocked() {
@@ -208,12 +233,7 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
         }
 
         // Snapshot state under lock to avoid race conditions
-        lock.lock()
-        let useHNSWSearch = useHNSW && hnswIndex != nil && indexItems.count >= 100
-        let currentHNSW = hnswIndex
-        let currentItems = indexItems
-        let currentItemsByID = itemsByID
-        lock.unlock()
+        let (useHNSWSearch, currentHNSW, currentItems, currentItemsByID) = snapshotStateForSearch()
 
         // Use HNSW for fast approximate search when available and index is large enough
         if useHNSWSearch, let hnsw = currentHNSW {
@@ -303,21 +323,7 @@ public extension SimilarityIndex {
         let embeddingResult = await getEmbedding(for: text, embedding: embedding)
         let item = IndexItem(id: id, text: text, embedding: embeddingResult, metadata: metadata)
 
-        lock.lock()
-        defer { lock.unlock() }
-
-        // Update secondary index
-        itemsByID[id] = indexItems.count
-
-        // Add to HNSW if enabled
-        if useHNSW {
-            if hnswIndex == nil {
-                hnswIndex = HNSWIndex(M: 16, efConstruction: 200, efSearch: 50)
-            }
-            hnswIndex?.insert(id: id, embedding: embeddingResult)
-        }
-
-        indexItems.append(item)
+        addItemToIndexLocked(id: id, item: item, embedding: embeddingResult)
     }
 
     /// Progress update for addItems operations
