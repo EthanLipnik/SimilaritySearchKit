@@ -100,6 +100,8 @@ The `Examples` directory contains multple sample iOS and macOS applications that
 | `MiniLMAll` | Text similarity, fastest inference | 46 MB | [HuggingFace](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) |
 | `Distilbert` | Q&A search, highest accuracy | 86 MB (quantized) | [HuggingFace](https://huggingface.co/sentence-transformers/msmarco-distilbert-base-tas-b) |
 | `MiniLMMultiQA` | Q&A search, fastest inference | 46 MB | [HuggingFace](https://huggingface.co/sentence-transformers/multi-qa-MiniLM-L6-cos-v1) |
+| `BGESmall` | General semantic search, conversations & docs | 64 MB | [HuggingFace](https://huggingface.co/BAAI/bge-small-en-v1.5) |
+| `E5Small` | Text retrieval, excellent accuracy | 64 MB | [HuggingFace](https://huggingface.co/intfloat/e5-small-v2) |
 
 Models conform the the `EmbeddingProtocol` and can be used interchangeably with the `SimilarityIndex` class.
 
