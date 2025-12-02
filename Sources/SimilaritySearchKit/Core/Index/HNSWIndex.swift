@@ -113,7 +113,7 @@ public final class HNSWIndex: @unchecked Sendable {
         }
 
         let newLevel = randomLevel()
-        var newNode = HNSWNode(id: id, embedding: embedding, level: newLevel)
+        let newNode = HNSWNode(id: id, embedding: embedding, level: newLevel)
         let newIndex = nodes.count
 
         // Handle first node
@@ -566,6 +566,7 @@ private struct Heap<Element> {
         siftUp(from: elements.count - 1)
     }
 
+    @discardableResult
     mutating func popMax() -> Element? {
         guard !elements.isEmpty else { return nil }
         if elements.count == 1 {

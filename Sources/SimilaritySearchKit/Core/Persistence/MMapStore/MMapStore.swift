@@ -85,7 +85,7 @@ public class MMapStore: VectorStoreProtocol {
         let dimension = items[0].embedding.count
 
         // Validate all items have same dimension
-        for (index, item) in items.enumerated() {
+        for item in items {
             guard item.embedding.count == dimension else {
                 throw MMapStoreError.dimensionMismatch(expected: dimension, got: item.embedding.count)
             }
