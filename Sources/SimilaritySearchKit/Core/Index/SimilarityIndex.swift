@@ -134,6 +134,13 @@ public class SimilarityIndex: Identifiable, Hashable, @unchecked Sendable {
 
         /// A dictionary containing metadata for the item.
         public var metadata: [String: String]
+
+        public init(id: String, text: String, embedding: [Float], metadata: [String: String]) {
+            self.id = id
+            self.text = text
+            self.embedding = embedding
+            self.metadata = metadata
+        }
     }
 
     /// An Identifiable object containing information about a search result.
